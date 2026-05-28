@@ -4,84 +4,68 @@ import requests
 from datetime import datetime, timezone
 
 API_KEY = os.environ["FICHIER_API_KEY"]
-FOLDER_ID = "W1fFILam"
+FOLDER_SLUG = "W1fFILam"  # el slug de la URL pública
 
-def get_folder_files():
-    url = "https://api.1fichier.com/v1/folder/ls.cgi"
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {"folder_id": FOLDER_ID}
+HEADERS = {
+    "Authorization": f"Bearer {API_KEY}",
+    "Content-Type": "application/json"
+}
 
-    r = requests.post(url, headers=headers, json=payload)
-    r.raise_for_status()
-    data = r.json()
-    return data.get("items", [])
+def post(url, payload):
+    r = requests.post(url, headers=HEADERS, json=payload, timeout=15)
+    print(f"  Status: {r.status_code}")
+    try:
+        print(f"  Response: {json.dumps(r.json(), indent=2)[:1200]}")
+    except Exception:
+        print(f"  Response (raw): {r.text[:600]}")
+    return r
 
-def get_download_url(file_id):
-    url = "https://api.1fichier.com/v1/download/get_token.cgi"
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {"url": f"https://1fichier.com/?{file_id}"}
-
-    r = requests.post(url, headers=headers, json=payload)
-    r.raise_for_status()
-    data = r.json()
-    return data.get("url", f"https://1fichier.com/?{file_id}")
+def find_folder_id(sub_folders, slug):
+    """Busca recursivamente la carpeta cuyo 'shared' contiene el slug."""
+    for f in sub_folders:
+        shared = f.get("shared", "") or ""
+        if slug in shared:
+            return f["id"], f["name"]
+        # si tiene sub-carpetas anidadas
+        if f.get("sub_folders"):
+            result = find_folder_id(f["sub_folders"], slug)
+            if result:
+                return result
+    return None, None
 
 def main():
-    print("Fetching files from 1fichier folder...")
-    files = get_folder_files()
+    print("=== Step 1: list root folder (id=0) to find numeric folder_id ===\n")
+    r = post("https://api.1fichier.com/v1/folder/ls.cgi", {})
 
-    if not files:
-        print("No files found in folder.")
+    if r.status_code != 200:
+        print("Root listing failed. Trying with empty hash as docs suggest...")
+        r = post("https://api.1fichier.com/v1/folder/ls.cgi", {"folder_id": 0})
+
+    if r.status_code != 200:
+        print("Cannot list root folder. Check API key permissions.")
         return
 
-    result = {
-        "updated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    }
+    data = r.json()
+    sub_folders = data.get("sub_folders", [])
+    print(f"\nFound {len(sub_folders)} sub-folder(s) in root.")
 
-    for f in files:
-        name = f.get("filename", "")
-        file_id = f.get("code", "")
-        size = f.get("size", 0)
-        size_mb = round(size / (1024 * 1024), 1) if size else 0
+    # Intentar encontrar el folder por el slug en la URL compartida
+    folder_id, folder_name = find_folder_id(sub_folders, FOLDER_SLUG)
 
-        print(f"Found: {name}")
-
-        # Detectar versión desde el nombre: [vXXXXXXXX]
-        version = ""
-        if "[v" in name and "]" in name:
-            start = name.index("[v") + 1
-            end = name.index("]", start)
-            version = name[start:end]
-
-        download_url = f"https://1fichier.com/?{file_id}"
-
-        if "[Base]" in name or "[base]" in name:
-            result["url_base"] = download_url
-            result["filename_base"] = name
-            result["version_base"] = version
-            result["size_base"] = f"{size_mb} MB"
-        elif "[Update]" in name or "[update]" in name:
-            result["url_update"] = download_url
-            result["filename_update"] = name
-            result["version_update"] = version
-            result["size_update"] = f"{size_mb} MB"
-
-    if "url_base" not in result and "url_update" not in result:
-        print("Warning: Could not identify base or update files.")
-        print("Files found:", [f.get("filename") for f in files])
+    if folder_id:
+        print(f"\n✓ Found folder: '{folder_name}' → numeric id = {folder_id}")
+    else:
+        print("\nCould not auto-detect folder. Listing all sub-folders:")
+        for f in sub_folders:
+            print(f"  id={f['id']}  name={f['name']}  shared={f.get('shared','')}")
+        print("\nIdentify your folder above and hardcode FOLDER_ID in the final script.")
         return
 
-    with open("links.json", "w", encoding="utf-8") as fp:
-        json.dump(result, fp, indent=2, ensure_ascii=False)
-
-    print("links.json updated successfully:")
-    print(json.dumps(result, indent=2))
+    print(f"\n=== Step 2: list folder {folder_id} with files=1 ===\n")
+    r2 = post("https://api.1fichier.com/v1/folder/ls.cgi", {
+        "folder_id": folder_id,
+        "files": 1
+    })
 
 if __name__ == "__main__":
     main()
