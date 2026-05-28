@@ -4,68 +4,48 @@ import requests
 from datetime import datetime, timezone
 
 API_KEY = os.environ["FICHIER_API_KEY"]
-FOLDER_SLUG = "W1fFILam"  # el slug de la URL pública
+FOLDER_SLUG = "W1fFILam"
 
-HEADERS = {
-    "Authorization": f"Bearer {API_KEY}",
-    "Content-Type": "application/json"
-}
-
-def post(url, payload):
-    r = requests.post(url, headers=HEADERS, json=payload, timeout=15)
+def post(label, url, payload, headers):
+    print(f"\n--- {label} ---")
+    r = requests.post(url, headers=headers, json=payload, timeout=15)
     print(f"  Status: {r.status_code}")
     try:
-        print(f"  Response: {json.dumps(r.json(), indent=2)[:1200]}")
+        print(f"  Response: {json.dumps(r.json(), indent=2)[:800]}")
     except Exception:
-        print(f"  Response (raw): {r.text[:600]}")
+        print(f"  Response (raw): {r.text[:400]}")
     return r
 
-def find_folder_id(sub_folders, slug):
-    """Busca recursivamente la carpeta cuyo 'shared' contiene el slug."""
-    for f in sub_folders:
-        shared = f.get("shared", "") or ""
-        if slug in shared:
-            return f["id"], f["name"]
-        # si tiene sub-carpetas anidadas
-        if f.get("sub_folders"):
-            result = find_folder_id(f["sub_folders"], slug)
-            if result:
-                return result
-    return None, None
-
 def main():
-    print("=== Step 1: list root folder (id=0) to find numeric folder_id ===\n")
-    r = post("https://api.1fichier.com/v1/folder/ls.cgi", {})
+    key_preview = API_KEY[:6] + "..." + API_KEY[-4:] if len(API_KEY) > 10 else "(muy corta?)"
+    print(f"API key preview: {key_preview}  (len={len(API_KEY)})")
 
-    if r.status_code != 200:
-        print("Root listing failed. Trying with empty hash as docs suggest...")
-        r = post("https://api.1fichier.com/v1/folder/ls.cgi", {"folder_id": 0})
+    # Formato 1: Bearer con comillas (como muestra la doc de 1fichier literalmente)
+    h1 = {"Content-Type": "application/json", "Authorization": f'Bearer "{API_KEY}"'}
+    # Formato 2: Bearer sin comillas (estándar)
+    h2 = {"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"}
+    # Formato 3: solo la key como valor
+    h3 = {"Content-Type": "application/json", "Authorization": API_KEY}
 
-    if r.status_code != 200:
-        print("Cannot list root folder. Check API key permissions.")
+    payload = {}  # root, empty hash como indica la doc
+
+    r1 = post("Bearer con comillas", "https://api.1fichier.com/v1/folder/ls.cgi", payload, h1)
+    if r1.status_code == 200:
+        print("\n✓ Formato 1 funciona (Bearer con comillas)")
         return
 
-    data = r.json()
-    sub_folders = data.get("sub_folders", [])
-    print(f"\nFound {len(sub_folders)} sub-folder(s) in root.")
-
-    # Intentar encontrar el folder por el slug en la URL compartida
-    folder_id, folder_name = find_folder_id(sub_folders, FOLDER_SLUG)
-
-    if folder_id:
-        print(f"\n✓ Found folder: '{folder_name}' → numeric id = {folder_id}")
-    else:
-        print("\nCould not auto-detect folder. Listing all sub-folders:")
-        for f in sub_folders:
-            print(f"  id={f['id']}  name={f['name']}  shared={f.get('shared','')}")
-        print("\nIdentify your folder above and hardcode FOLDER_ID in the final script.")
+    r2 = post("Bearer sin comillas", "https://api.1fichier.com/v1/folder/ls.cgi", payload, h2)
+    if r2.status_code == 200:
+        print("\n✓ Formato 2 funciona (Bearer sin comillas)")
         return
 
-    print(f"\n=== Step 2: list folder {folder_id} with files=1 ===\n")
-    r2 = post("https://api.1fichier.com/v1/folder/ls.cgi", {
-        "folder_id": folder_id,
-        "files": 1
-    })
+    r3 = post("Solo la key", "https://api.1fichier.com/v1/folder/ls.cgi", payload, h3)
+    if r3.status_code == 200:
+        print("\n✓ Formato 3 funciona (key directa)")
+        return
+
+    print("\n✗ Ningún formato funcionó.")
+    print("Verifica que la API key sea correcta y tenga permisos de lectura de carpetas.")
 
 if __name__ == "__main__":
     main()
